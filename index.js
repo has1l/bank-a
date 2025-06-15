@@ -20,14 +20,20 @@ const db = mysql.createPool({
 });
 
 const pool = db.promise(); 
+
 db.getConnection((err, connection) => {
-  if (!err) {
+  if (err) {
+    console.error('Ошибка подключения к БД:', err);
+  } else {
+    console.log('✅ Подключение к БД прошло успешно');
     connection.release();
   }
 });
 
+
 app.post('/login', (req, res) => {
   const { phone, password } = req.body;
+  console.log('Тело запроса:', req.body);
 
   if (!phone || !password) {
     return res.status(400).json({ success: false, message: 'Введите логин и пароль' });
@@ -40,6 +46,9 @@ app.post('/login', (req, res) => {
   `;
   db.query(query, [phone.replace(/\D/g, ''), password], (err, results) => {
     if (err) {
+      console.error('Ошибка запроса:', err);
+      console.log('SQL-запрос:', query);
+      console.log('Параметры:', [phone.replace(/\D/g, ''), password]);
       return res.status(500).json({ success: false, message: 'Ошибка сервера' });
     }
 
@@ -69,6 +78,7 @@ app.post('/register', (req, res) => {
   `;
   db.query(checkQuery, [phone.replace(/\D/g, '')], (err, results) => {
     if (err) {
+      console.error('Ошибка проверки пользователя:', err);
       return res.status(500).json({ success: false, message: 'Ошибка сервера' });
     }
 
@@ -79,12 +89,15 @@ app.post('/register', (req, res) => {
     const insertQuery = 'INSERT INTO users (name, phone, password_hash, created_at) VALUES (?, ?, ?, NOW())';
     db.query(insertQuery, [name, phone, password], (err, result) => {
       if (err) {
+        console.error('Ошибка регистрации:', err);
         return res.status(500).json({ success: false, message: 'Ошибка сервера при регистрации' });
       }
+
       res.status(201).json({ success: true, message: 'Регистрация успешна' });
     });
   });
 });
+
 
 app.post('/check-user', (req, res) => {
   let phone = req.body.phone;
@@ -92,13 +105,18 @@ app.post('/check-user', (req, res) => {
     return res.status(400).json({ exists: false, message: 'Номер не указан' });
   }
 
+
   phone = phone.replace(/\D/g, '');
+
+  console.log(" Проверка номера:", phone);
   const query = `
     SELECT * FROM users WHERE
     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, "+", ""), "(", ""), ")", ""), "-", ""), " ", "") = ?
   `;
   db.query(query, [phone], (err, results) => {
+    console.log(" Результаты из базы:", results);
     if (err) {
+      console.error('Ошибка проверки номера:', err);
       return res.status(500).json({ exists: false, message: 'Ошибка сервера' });
     }
 
@@ -109,6 +127,7 @@ app.post('/check-user', (req, res) => {
     }
   });
 });
+
 
 app.post('/update-name', (req, res) => {
   const { phone, newName } = req.body;
@@ -123,11 +142,14 @@ app.post('/update-name', (req, res) => {
   `;
   db.query(updateQuery, [newName, phone.replace(/\D/g, '')], (err, result) => {
     if (err) {
+      console.error('Ошибка обновления имени:', err);
       return res.status(500).json({ success: false, message: 'Ошибка сервера' });
     }
+
     res.json({ success: true, message: 'Имя обновлено' });
   });
 });
+
 
 app.get('/balance', (req, res) => {
   let phone = req.query.phone;
@@ -142,8 +164,10 @@ app.get('/balance', (req, res) => {
   `;
   db.query(query, [phone], (err, results) => {
     if (err) {
+      console.error('Ошибка получения баланса:', err);
       return res.status(500).json({ success: false, message: 'Ошибка сервера' });
     }
+
     if (results.length > 0) {
       res.json({ success: true, balance: results[0].balance });
     } else {
@@ -151,6 +175,7 @@ app.get('/balance', (req, res) => {
     }
   });
 });
+
 
 app.post('/balance', (req, res) => {
   const { phone, balance } = req.body;
@@ -164,18 +189,21 @@ app.post('/balance', (req, res) => {
   `;
   db.query(updateQuery, [balance, phone.replace(/\D/g, '')], (err, result) => {
     if (err) {
+      console.error('Ошибка обновления баланса:', err);
       return res.status(500).json({ success: false, message: 'Ошибка сервера' });
     }
+
     res.json({ success: true, message: 'Баланс обновлён' });
   });
 });
 
 const openai = new OpenAI({
-  apiKey: process.env.neyro,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 app.post('/analyzeYesterday', async (req, res) => {
   const { expenses, phone } = req.body;
+  console.log(" Получен анализ трат:", expenses);
 
   try {
     const completion = await openai.chat.completions.create({
@@ -203,23 +231,44 @@ app.post('/analyzeYesterday', async (req, res) => {
     });
 
     const reply = completion.choices[0].message.content;
+    console.log("Ответ от GPT:", reply);
+
     const adviceMatch = reply.match(/Совет[:：](.+)/i);
     const advice = adviceMatch ? adviceMatch[1].trim() : "";
+
     const tasks = reply
       .split('\n')
-      .filter(line => line.trim().match(/^\d\.\s/))
+      .filter(line => line.trim().match(/^\d\.\s/)) 
       .map(line => line.replace(/^\d\.\s/, '').trim());
+
+    console.log(" Парсинг заданий:", tasks);
+    console.log(" Парсинг совета:", advice);
+
     const normalizedPhone = phone.replace(/\D/g, '');
+    console.log("📞 Нормализованный телефон для сохранения:", normalizedPhone);
     const taskValues = tasks.map(task => [normalizedPhone, task]);
     const taskQuery = 'INSERT INTO tasks (phone, task) VALUES ?';
+
     db.query(taskQuery, [taskValues], (err) => {
-      if (!err) {
+      if (err) {
+        console.error(' Ошибка при сохранении заданий:', err);
+      } else {
+        console.log(' Задания сохранены в БД');
+
         const adviceQuery = 'INSERT INTO advice (phone, content) VALUES (?, ?)';
-        db.query(adviceQuery, [normalizedPhone, advice], (err) => {});
+        db.query(adviceQuery, [normalizedPhone, advice], (err) => {
+          if (err) {
+            console.error(' Ошибка при сохранении совета:', err);
+          } else {
+            console.log(' Совет сохранён в БД');
+          }
+        });
       }
     });
+
     res.json({ tasks, advice });
   } catch (error) {
+    console.error(" Ошибка GPT:", error.message);
     res.status(500).json({ response: "Произошла ошибка анализа" });
   }
 });
@@ -231,6 +280,8 @@ app.post('/analyzeToday', async (req, res) => {
   if (!phone || !Array.isArray(expenses) || !Array.isArray(tasks)) {
     return res.status(400).json({ success: false, message: 'Номер, траты и задания обязательны' });
   }
+
+  console.log("📥 Запрос анализа выполнения задач на сегодня:", { phone, expenses, tasks });
 
   try {
     const gptMessages = [
@@ -257,10 +308,16 @@ app.post('/analyzeToday', async (req, res) => {
     });
 
     const reply = completion.choices[0].message.content;
+    console.log("✅ Ответ от GPT:", reply);
+
+
     const match = reply.match(/Выполнено:\s*(\d+)/i);
     const completed = match ? parseInt(match[1]) : 0;
+
+    
     const adviceMatch = reply.match(/Совет[:：](.+)/i);
     const advice = adviceMatch ? adviceMatch[1].trim() : "";
+
     const completedTasks = reply
       .split('\n')
       .filter(line => line.includes('— ✅'))
@@ -269,11 +326,17 @@ app.post('/analyzeToday', async (req, res) => {
         return match ? match[1].trim() : null;
       })
       .filter(task => task);
+
+   
     const updateScore = `
       UPDATE users SET score = score + ?
       WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, "+", ""), "(", ""), ")", ""), "-", ""), " ", "") = ?
     `;
-    db.query(updateScore, [completed, phone.replace(/\D/g, '')], (err) => {});
+    db.query(updateScore, [completed, phone.replace(/\D/g, '')], (err) => {
+      if (err) console.error("❌ Ошибка обновления счёта:", err);
+      else console.log(`✅ Счёт (баллы) увеличен на ${completed}`);
+    });
+
     res.json({
       success: true,
       completedTasks,
@@ -281,6 +344,7 @@ app.post('/analyzeToday', async (req, res) => {
       advice
     });
   } catch (err) {
+    console.error("❌ GPT анализ Today:", err.message);
     res.status(500).json({ success: false, message: "Ошибка анализа" });
   }
 });
@@ -294,22 +358,28 @@ app.post('/save-analysis', (req, res) => {
   }
 
   const normalizedPhone = phone.replace(/\D/g, '');
+  console.log("📞 Нормализованный телефон для сохранения:", normalizedPhone);
   const taskValues = tasks.map(task => [normalizedPhone, task]);
   const taskQuery = 'INSERT INTO tasks (phone, task) VALUES ?';
 
   db.query(taskQuery, [taskValues], (err) => {
     if (err) {
+      console.error('❌ Ошибка при сохранении заданий:', err);
       return res.status(500).json({ success: false, message: 'Ошибка при сохранении заданий' });
     }
+
     const adviceQuery = 'INSERT INTO advice (phone, content) VALUES (?, ?)';
     db.query(adviceQuery, [normalizedPhone, advice], (err) => {
       if (err) {
+        console.error('❌ Ошибка при сохранении совета:', err);
         return res.status(500).json({ success: false, message: 'Ошибка при сохранении совета' });
       }
+
       res.json({ success: true, message: 'Задания и совет сохранены' });
     });
   });
 });
+
 
 app.get('/tasks', (req, res) => {
   const phone = req.query.phone?.replace(/\D/g, '');
@@ -326,6 +396,7 @@ app.get('/tasks', (req, res) => {
     res.json({ success: true, tasks });
   });
 });
+
 
 app.get('/advice', (req, res) => {
   const phone = req.query.phone?.replace(/\D/g, '');
@@ -344,6 +415,7 @@ app.get('/advice', (req, res) => {
   });
 });
 
+
 app.get('/score', async (req, res) => {
   const phone = req.query.phone;
   if (!phone) {
@@ -359,12 +431,15 @@ app.get('/score', async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Пользователь не найден' });
     }
+
     const score = rows[0].score ?? 0;
     res.json({ success: true, score });
   } catch (error) {
+    console.error('Ошибка при получении баллов:', error);
     res.status(500).json({ success: false, message: 'Ошибка сервера' });
   }
 });
+
 
 app.post('/score', async (req, res) => {
   const { phone, score } = req.body;
@@ -374,24 +449,33 @@ app.post('/score', async (req, res) => {
 
   try {
     const cleaned = phone.replace(/\D/g, '');
+
+  
     const updateQuery = `
       UPDATE users SET score = score + ?
       WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, "+", ""), "(", ""), ")", ""), "-", ""), " ", "") = ?
     `;
     const [result] = await pool.query(updateQuery, [score, cleaned]);
+
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: 'Пользователь не найден' });
     }
+
+  
     const [rows] = await pool.query(`
       SELECT score FROM users WHERE
       REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, "+", ""), "(", ""), ")", ""), "-", ""), " ", "") = ?
     `, [cleaned]);
+
     const newScore = rows[0]?.score ?? 0;
+
     res.json({ success: true, message: 'Баллы добавлены', score: newScore });
   } catch (error) {
+    console.error('❌ Ошибка при добавлении баллов:', error);
     res.status(500).json({ success: false, message: 'Ошибка сервера' });
   }
 });
+
 
 app.post('/resetUserData', (req, res) => {
   const rawPhone = req.body.phone;
@@ -405,16 +489,22 @@ app.post('/resetUserData', (req, res) => {
 
   db.query(deleteTasksQuery, [phone], (err) => {
     if (err) {
+      console.error('❌ Ошибка при удалении заданий:', err);
       return res.status(500).json({ success: false, message: 'Ошибка при удалении заданий' });
     }
+
     db.query(deleteAdviceQuery, [phone], (err2) => {
       if (err2) {
+        console.error('❌ Ошибка при удалении совета:', err2);
         return res.status(500).json({ success: false, message: 'Ошибка при удалении совета' });
       }
+
+      console.log(`🧹 Удалены задания и совет пользователя ${phone}`);
       res.json({ success: true, message: 'Задания и совет удалены' });
     });
   });
 });
+
 
 app.post('/resetAdviceOnly', (req, res) => {
   const rawPhone = req.body.phone;
@@ -430,11 +520,15 @@ app.post('/resetAdviceOnly', (req, res) => {
   `;
   db.query(deleteAdviceQuery, [phone], (err) => {
     if (err) {
+      console.error('❌ Ошибка при удалении совета:', err);
       return res.status(500).json({ success: false, message: 'Ошибка при удалении совета' });
     }
+
+    console.log(`🧹 Удалён только совет пользователя ${phone}`);
     res.json({ success: true, message: 'Совет удалён' });
   });
 });
+
 
 app.post('/resetTasksOnly', (req, res) => {
   const rawPhone = req.body.phone;
@@ -450,11 +544,15 @@ app.post('/resetTasksOnly', (req, res) => {
   `;
   db.query(deleteTasksQuery, [phone], (err) => {
     if (err) {
+      console.error('❌ Ошибка при удалении заданий:', err);
       return res.status(500).json({ success: false, message: 'Ошибка при удалении заданий' });
     }
+
+    console.log(`🧹 Удалены только задания пользователя ${phone}`);
     res.json({ success: true, message: 'Задания удалены' });
   });
 });
+
 
 app.get('/expenses', (req, res) => {
   const phone = req.query.phone?.replace(/\D/g, '');
@@ -476,10 +574,12 @@ app.get('/expenses', (req, res) => {
   });
 });
 
+
 app.get("/boosts", async (req, res) => {
     const phone = req.query.phone;
 
     try {
+       
         const cleanedPhone = phone.replace(/\D/g, '');
         const [userRows] = await pool.execute(`
           SELECT id FROM users_boost WHERE
@@ -488,13 +588,19 @@ app.get("/boosts", async (req, res) => {
         if (userRows.length === 0) {
             return res.json({ success: false, message: "Пользователь не найден" });
         }
+
         const userId = userRows[0].id;
+
+        
         const [boosts] = await pool.execute("SELECT * FROM boosts WHERE user_id = ?", [userId]);
+
         res.json({ success: true, data: boosts });
     } catch (error) {
+        console.error("Ошибка при получении бустов:", error);
         res.status(500).json({ success: false, message: "Ошибка сервера" });
     }
 });
+
 
 app.post('/boost-nickname', (req, res) => {
     const { phone, nickname } = req.body;
@@ -506,12 +612,15 @@ app.post('/boost-nickname', (req, res) => {
     const checkQuery = 'SELECT * FROM users_boost WHERE phone = ?';
     db.query(checkQuery, [phone], (err, results) => {
         if (err) {
+            console.error(err);
             return res.status(500).json({ success: false, message: 'Ошибка сервера' });
         }
+
         if (results.length > 0) {
             const updateQuery = 'UPDATE users_boost SET nickname = ? WHERE phone = ?';
             db.query(updateQuery, [nickname, phone], (err) => {
                 if (err) {
+                    console.error(err);
                     return res.status(500).json({ success: false, message: 'Ошибка обновления ника' });
                 }
                 return res.json({ success: true, message: 'Никнейм обновлён' });
@@ -520,6 +629,7 @@ app.post('/boost-nickname', (req, res) => {
             const insertQuery = 'INSERT INTO users_boost (phone, nickname) VALUES (?, ?)';
             db.query(insertQuery, [phone, nickname], (err) => {
                 if (err) {
+                    console.error(err);
                     return res.status(500).json({ success: false, message: 'Ошибка создания пользователя' });
                 }
                 return res.json({ success: true, message: 'Пользователь создан' });
@@ -527,6 +637,7 @@ app.post('/boost-nickname', (req, res) => {
         }
     });
 });
+
 
 app.post('/boosts', (req, res) => {
     const { phone, video_url, title } = req.body;
@@ -537,15 +648,20 @@ app.post('/boosts', (req, res) => {
     const findUserIdQuery = 'SELECT id FROM users_boost WHERE phone = ?';
     db.query(findUserIdQuery, [phone], (err, userResults) => {
         if (err) {
+            console.error(err);
             return res.status(500).json({ success: false, message: 'Ошибка сервера' });
         }
+
         if (userResults.length === 0) {
             return res.status(404).json({ success: false, message: 'Пользователь не найден' });
         }
+
         const userId = userResults[0].id;
         const insertBoostQuery = 'INSERT INTO boosts (user_id, video_url, title) VALUES (?, ?, ?)';
+
         db.query(insertBoostQuery, [userId, video_url, title], (err, result) => {
             if (err) {
+                console.error(err);
                 return res.status(500).json({ success: false, message: 'Ошибка при добавлении буста' });
             }
             res.json({ success: true, message: 'Буст добавлен' });
@@ -553,5 +669,8 @@ app.post('/boosts', (req, res) => {
     });
 });
 
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT);
+app.listen(PORT, () => {
+  console.log(`Сервер запущен на http://localhost:${PORT}`);
+});
